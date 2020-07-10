@@ -1,0 +1,9 @@
+
+.entry-author {
+    font-size: 0.688em;
+    text-transform: uppercase;
+    letter-spacing: 0.2em; }
+
+blockquote>div.citation {
+    padding-bottom: 20px;
+}

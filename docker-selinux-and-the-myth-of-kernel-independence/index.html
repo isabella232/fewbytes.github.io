@@ -1,0 +1,46 @@
+<!doctype html><html lang=en-us><head><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1"><title>Fewbytes</title><link href="http://fonts.googleapis.com/css?family=Gentium+Basic:400,700,400italic" rel=stylesheet type=text/css><link href="http://fonts.googleapis.com/css?family=Open+Sans:700,400" rel=stylesheet type=text/css><link rel=alternate type=application/rss+xml title="Fewbytes &#187; Feed" href=http://www.fewbytes.com/feed/><link rel=alternate type=application/rss+xml title="Fewbytes &#187; Comments Feed" href=http://www.fewbytes.com/comments/feed/><script type=text/javascript>window._wpemojiSettings={"baseUrl":"http:\/\/s.w.org\/images\/core\/emoji\/72x72\/","ext":".png","source":{"concatemoji":"http:\/\/www.fewbytes.com\/wp-includes\/js\/wp-emoji-release.min.js?ver=4.3.1"}};!function(a,b,c){function d(a){var c=b.createElement("canvas"),d=c.getContext&&c.getContext("2d");return d&&d.fillText?(d.textBaseline="top",d.font="600 32px Arial","flag"===a?(d.fillText(String.fromCharCode(55356,56812,55356,56807),0,0),c.toDataURL().length>3e3):(d.fillText(String.fromCharCode(55357,56835),0,0),0!==d.getImageData(16,16,1,1).data[0])):!1}function e(a){var c=b.createElement("script");c.src=a,c.type="text/javascript",b.getElementsByTagName("head")[0].appendChild(c)}var f,g;c.supports={simple:d("simple"),flag:d("flag")},c.DOMReady=!1,c.readyCallback=function(){c.DOMReady=!0},c.supports.simple&&c.supports.flag||(g=function(){c.readyCallback()},b.addEventListener?(b.addEventListener("DOMContentLoaded",g,!1),a.addEventListener("load",g,!1)):(a.attachEvent("onload",g),b.attachEvent("onreadystatechange",function(){"complete"===b.readyState&&c.readyCallback()})),f=c.source||{},f.concatemoji?e(f.concatemoji):f.wpemoji&&f.twemoji&&(e(f.twemoji),e(f.wpemoji)))}(window,document,window._wpemojiSettings);</script><style type=text/css>img.wp-smiley,img.emoji{display:inline!important;border:none!important;box-shadow:none!important;height:1em!important;width:1em!important;margin:0 .07em!important;vertical-align:-.1em!important;background:0 0!important;padding:0!important}</style><link rel=stylesheet id=parent-style-css href=/css/style.css type=text/css media=all><link rel=stylesheet id=brosco-style-css href=/css/style2.css type=text/css media=all><script type=text/javascript src=http://ajax.googleapis.com/ajax/libs/jquery/1.11.0/jquery.min.js></script></head><body class="page-template-default group-blog"><div id=page class="hfeed site"><a class="skip-link screen-reader-text" href=#content>Skip to content</a><header id=masthead class=site-header role=banner><div class=header-inside><div class=logo><a href=http://www.fewbytes.com/ title=Fewbytes rel=home><img src=http://www.fewbytes.com/wp-content/uploads/2015/11/fewbytes-logo1.png alt=Fewbytes></a></div><nav id=site-navigation class=main-navigation role=navigation><button class=menu-toggle>Primary Menu</button><div class=menu-top-bar-container><ul id=menu-top-bar class=menu><li id=menu-item-374 class="menu-item menu-item-type-post_type menu-item-object-page current-menu-item page_item page-item-77 current_page_item menu-item-374"><a href=/>Home</a></li><li id=menu-item-89 class="menu-item menu-item-type-taxonomy menu-item-object-category menu-item-89"><a href=/posts/>Blog</a></li></ul></div></nav></header><div id=content class=site-content><section id=primary class=content-area><main class=site-main><div class=single-post><div class=container><article class="post type-post status-publish"><header class=entry-header><h1 class=entry-title>Docker, SELinux and the myth of kernel independence</h1><div class=entry-meta><time class="entry-date published posted-on">November 21, 2014</time> | <span class=entry-author>Avishai Ish-Shalom</span></div></header><div class=entry-content><p>Recently I built docker images for omnibus builds. Omnibus packages must be built on the target distro so I needed images for centos, debian and ubuntu. Usually I build such docker images on my laptop which is running Ubuntu; I try to make the builds as repeatable as possible using the excellent packer tool and when I publish images I build them again (using a build server) on cloud instances. In this case, I was using GCE CentOS 7 instance to perform the build and I was surprised when a build that was smooth on my laptop failed miserably. The build was for Ubuntu precise and the build step that failed was the the creation of the omnibus user. This was really weird since creating a user is a trivial task that was unexpected to fail.</p><p>After I did a little digging, I found that running the following command in an Ubuntu container running on CentOS 7 host fails with return code 12:</p><p><code>useradd -m -d /home/test test</code></p><p>On an Ubuntu host using the same image (ubuntu:precise) or a CentOS image (centos:centos6) on either CentOS or Ubuntu host works fine. I checked man useradd and found that return code 12 is &ldquo;can&rsquo;t create home directory&rdquo;, which immediately pointed towards SELinux as the culprit. Ubuntu does not use SELinux and I suspected it was blocking the Ubuntu userland tools. I ran setenforce 0 to switch SELinux to permissive mode and tried again, but got return code 12 once more&mldr; weird.</p><p>It was time to bring in the heavy guns. I ran the container again, this time in privileged mode and used strace to see what useradd was doing:</p><pre><code>....
+access(&quot;/home/test&quot;, F_OK) = -1 ENOENT (No such file or directory)
+open(&quot;/proc/filesystems&quot;, O_RDONLY) = 8
+fstat(8, {st_mode=S_IFREG|0444, st_size=0, ...}) = 0
+mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS, -1, 0) = 0x7f64448c4000
+read(8, &quot;nodev\tsysfs\nnodev\trootfs\nnodev\tb&quot;..., 1024) = 310
+gettid() = 55
+open(&quot;/proc/self/task/55/attr/current&quot;, O_RDONLY) = 9
+read(9, &quot;system_u:system_r:svirt_lxc_net_&quot;..., 4095) = 47
+close(9) = 0
+close(8) = 0
+munmap(0x7f64448c4000, 4096) = 0
+open(&quot;/etc/selinux/config&quot;, O_RDONLY) = -1 ENOENT (No such file or directory)
+open(&quot;/etc/selinux/targeted/contexts/files/file_contexts.subs_dist&quot;, O_RDONLY) = -1 ENOENT (No such file or directory)
+open(&quot;/etc/selinux/targeted/contexts/files/file_contexts.subs&quot;, O_RDONLY) = -1 ENOENT (No such file or directory)
+open(&quot;/etc/selinux/targeted/contexts/files/file_contexts&quot;, O_RDONLY) = -1 ENOENT (No such file or directory)
+....
+close(3) = 0
+exit_group(12) = ?
+</code></pre><p>It seems that useradd is trying to read selinux config files to get the configuration of the context to set for new users. Of course, Ubuntu images don&rsquo;t have any such configuration files so it fails. I then looked at the source code of the shadow package:</p><pre><code>--- useradd.c
+1763 static void create_home (void)
+1764 {
+1765 if (access (user_home, F_OK) != 0) {
+1766 #ifdef WITH_SELINUX
+1767 if (set_selinux_file_context (user_home) != 0) {
+1768 fail_exit (E_HOMEDIR);
+1769 }
+1770 #endif
+--- libmisc/copydir.c
+126 int set_selinux_file_context (const char *dst_name)
+127 {
+128 /*@null@*/security_context_t scontext = NULL;
+129
+130 if (!selinux_checked) {
+131 selinux_enabled = is_selinux_enabled () &gt; 0;
+132 selinux_checked = true;
+133 }
+134
+135 if (selinux_enabled) {
+136 /* Get the default security context for this file */
+137 if (matchpathcon (dst_name, 0, &amp;scontext) &lt; 0) {
+138 if (security_getenforce () != 0) {
+139 return 1;
+140 }
+141 }
+</code></pre><p>For some reason, it seems some Ubuntu userland tools are compiled with SELinux support; They detect the presence the of SELinux and try to set the default context for the new user. So although SELinux was not blocking useradd (SELinux was switched to permissive mode) useradd still failed because it tried to use a feature that is not supported in Ubuntu.</p><p>This is clearly a problem in the Ubuntu image and not docker itself but it does highlight the degree of reliance distribution packages have on implicit and sometime undocumented configurations and APIs. While docker enthusiasts claim you can &ldquo;run any app anywhere&rdquo; this is unfortunately not true in many cases. Many userland tools are coupled to kernel features, kernel modules, distro specific kernel configurations, etc. Moreover, this example shows that generic linux/gnu tools may behave differently in the presence of different kernels despite claims of transparent compatibility. Over the years we have built a complex web of interdependence between kernelspace, userspace, compile-time configurations and runtime configurations; it will takes years to untangle this mess and most distributions seem to be interested in other tasks. sigh.</p></div></article></div><nav class="navigation post-navigation" role=navigation><h1 class=screen-reader-text>Post navigation</h1><div class=nav-links style=display:block><div class=nav-previous><a href=/opstalk-meetup-7-riemann-workshop/ rel=prev><span class=meta-nav></span>Previous</a></div><div class=nav-next><a href=/the-problem-with-configurations/ rel=next>Next <span class=meta-nav></span></a></div></div></nav></div></main></section></div><footer id=colophon class=site-footer role=contentinfo><div class=site-info>&copy; Fewbytes</div></footer></div></body></html>
